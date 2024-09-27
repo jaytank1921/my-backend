@@ -23,12 +23,11 @@ const app = express();
 const port = 5000;
 
 // Middleware
-const corsOptions = {
-    origin: 'https://your-frontend-url.vercel.app', // Update with your frontend URL
-    methods: 'GET,POST,PUT,DELETE',
-    credentials: true,
-};
-app.use(cors(corsOptions));
+app.use(cors({
+    origin: 'https://crmfront-shj9.vercel.app/', // Replace with your actual Vercel frontend domain
+    methods: ['GET', 'POST', 'PUT', 'DELETE'], // Include the methods you are using
+    credentials: true
+}));
 app.use(bodyParser.json());
 app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 
@@ -209,5 +208,5 @@ app.get('/api/agreements', async (req, res) => {
 
 // Start the server
 app.listen(port, '0.0.0.0', () => {
-    console.log(`Server running on https://your-backend.onrender.com:${port}`);
+    console.log(`Server running on http://192.168.2.202:${port}`);
 }); 
