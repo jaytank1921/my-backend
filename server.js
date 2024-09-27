@@ -1,67 +1,44 @@
 require('dotenv').config();
 const express = require('express');
-const mongoose = require('mongoose');
 const bodyParser = require('body-parser');
 const cors = require('cors');
 const bcrypt = require('bcrypt');
-const jwt = require('jsonwebtoken'); // Only one import needed
-const User = require('./models/User'); // Ensure this model is defined correctly
-const Lead = require('./models/Leads'); // Ensure this model is defined correctly
-const Agreement = require('./models/Agreement'); // Import Agreement model
-const multer = require('multer'); // For handling file uploads
+const jwt = require('jsonwebtoken');
+const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
+const { createClient } = require('@supabase/supabase-js');
+
+// Initialize Supabase client
+const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_KEY);
+
 const uploadsDir = path.join(__dirname, 'uploads');
 
-// Ensure uploads folder exists
 if (!fs.existsSync(uploadsDir)) {
     fs.mkdirSync(uploadsDir);
 }
 
-
 const app = express();
 const port = 5000;
 
-// Middleware
-app.use(cors({
-    origin: 'https://crmfront-shj9.vercel.app/', // Replace with your actual Vercel frontend domain
-    methods: ['GET', 'POST', 'PUT', 'DELETE'], // Include the methods you are using
-    credentials: true
-}));
+app.use(cors({ origin: 'http://localhost:3000' }));
 app.use(bodyParser.json());
-app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
+app.use('/uploads', express.static(uploadsDir));
 
-
-// Configure multer storage
 const storage = multer.diskStorage({
     destination: (req, file, cb) => {
-        cb(null, 'uploads'); // Save files to the 'uploads' directory
+        cb(null, uploadsDir);
     },
     filename: (req, file, cb) => {
-        cb(null, Date.now() + path.extname(file.originalname)); // Unique filename
+        cb(null, Date.now() + path.extname(file.originalname));
     },
 });
 
-const upload = multer({ storage: storage });
-
-
-// MongoDB connection
-mongoose.connect(process.env.MONGO_URI, {
-    useNewUrlParser: true,
-    useUnifiedTopology: true,
-})
-.then(async () => {
-    console.log('MongoDB connected');
-    // Fetch users after connection
-    const users = await User.find();
-    console.log('Users:', users); // Log users here
-})
-.catch(err => console.error('MongoDB connection error:', err.message));
-
+const upload = multer({ storage });
 
 // Generate JWT token
 const generateToken = (user) => {
-    return jwt.sign({ email: user.email }, process.env.JWT_SECRET, { expiresIn: '3h' });
+    return jwt.sign({ id: user.id, email: user.email }, process.env.JWT_SECRET, { expiresIn: '3h' });
 };
 
 // Login endpoint
@@ -69,9 +46,13 @@ app.post('/login', async (req, res) => {
     const { email, password } = req.body;
 
     try {
-        const user = await User.findOne({ email });
+        const { data: user, error } = await supabase
+            .from('users')
+            .select('*')
+            .eq('email', email)
+            .single();
 
-        if (!user) {
+        if (error || !user) {
             return res.status(401).json({ message: 'Invalid email or password.' });
         }
 
@@ -88,125 +69,69 @@ app.post('/login', async (req, res) => {
     }
 });
 
-
-
 // Middleware to authenticate the token
 const authenticateToken = (req, res, next) => {
     const token = req.headers['authorization']?.split(' ')[1];
-    console.log('Received token:', token); // Debug line to see if the token is coming through
 
     if (!token) {
-        console.log('No token provided');
         return res.status(401).json({ message: 'Unauthorized: No token provided' });
     }
 
     jwt.verify(token, process.env.JWT_SECRET, (err, user) => {
         if (err) {
-            console.error('Token verification error:', err); // Debug line to log verification errors
             return res.status(403).json({ message: 'Forbidden: Token verification failed' });
         }
-        req.user = user; // Attach the user object to req for later use
+        req.user = user;
         next();
     });
 };
 
+// Add user function
+async function addUser(name, email, password) {
+    const hashedPassword = await bcrypt.hash(password, 10);
+    const { data, error } = await supabase
+        .from('users')
+        .insert([{ name, email, password: hashedPassword }]);
 
-// const getUserData = async () => {
-//     const token = localStorage.getItem('token');
-
-//     try {
-//         const userResponse = await axios.get('http://localhost:5000/api/user', {
-//             headers: { Authorization: `Bearer ${token}` } // Include the token here
-//         });
-//         console.log('User data:', userResponse.data);
-//     } catch (error) {
-//         console.error('Error fetching user data:', error);
-//     }
-// };
-
-
-// Fetch user details
-app.get('/api/user', authenticateToken, async (req, res) => {
-    const userEmail = req.user.email;
-
-    try {
-        const user = await User.findOne({ email: userEmail });
-        if (!user) {
-            return res.status(404).json({ message: 'User not found' });
-        }
-        res.json({ email: user.email, name: user.name, address: user.address, contact: user.contact });
-    } catch (error) {
-        res.status(500).json({ message: 'Server error', error });
+    if (error) {
+        console.error('Error inserting data:', error);
+        throw new Error('Error inserting user data');
+    } else {
+        console.log('User added:', data);
     }
-});
+}
 
 // Add user endpoint
 app.post('/api/add-user', async (req, res) => {
-    const { email, password, name, address, contact } = req.body;
-
+    const { name, email, password } = req.body;
     try {
-        const hashedPassword = await bcrypt.hash(password, 10);
-        const user = new User({ email, password: hashedPassword, name, address, contact });
-        await user.save();
-        res.status(201).json(user);
+        await addUser(name, email, password);
+        res.status(201).json({ message: 'User added successfully' });
     } catch (error) {
-        res.status(400).json({ message: 'Error adding user', error });
+        console.error('Error adding user:', error); // Log the error
+        res.status(500).json({ message: 'Error adding user', error });
     }
 });
 
-// Get all leads
-app.get('/api/leads', async (req, res) => {
-    try {
-        const leads = await Lead.find();
-        res.json(leads);
-    } catch (error) {
-        res.status(500).json({ message: 'Error fetching leads', error });
+async function addUser(name, email, password) {
+    const hashedPassword = await bcrypt.hash(password, 10);
+    const { data, error } = await supabase
+      .from('users')
+      .insert([
+        { name: name, email: email, password: hashedPassword }
+      ]);
+
+    if (error) {
+        console.error('Error inserting data:', error);
+        throw new Error(error.message); // Throwing the specific Supabase error
+    } else {
+        console.log('User added:', data);
     }
-});
-
-// Add a new lead
-app.post('/api/leads', async (req, res) => {
-    const newLead = new Lead(req.body);
-    try {
-        await newLead.save();
-        res.status(201).json(newLead);
-    } catch (error) {
-        res.status(400).json({ message: 'Error creating lead', error });
-    }
-});
-
-// Add an agreement
-app.post('/api/agreements', upload.single('doc'), async (req, res) => {
-    const { name, propertyType } = req.body;
-
-    if (!req.file) {
-        return res.status(400).json({ message: 'No file uploaded.' });
-    }
-
-    const docPath = req.file.filename; // Only save the filename, not full path
-
-    try {
-        const agreement = new Agreement({ name, propertyType, doc: docPath });
-        await agreement.save();
-        res.status(201).json(agreement);
-    } catch (error) {
-        console.error('Error creating agreement:', error);
-        res.status(400).json({ message: 'Error creating agreement', error });
-    }
-});
+}
 
 
-// Get all agreements
-app.get('/api/agreements', async (req, res) => {
-    try {
-        const agreements = await Agreement.find();
-        res.json(agreements);
-    } catch (error) {
-        res.status(500).json({ message: 'Error fetching agreements', error });
-    }
-});
 
 // Start the server
 app.listen(port, '0.0.0.0', () => {
     console.log(`Server running on http://192.168.2.202:${port}`);
-}); 
+});
